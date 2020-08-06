@@ -4,12 +4,14 @@ import (
 	"flag"
 	"fmt"
 	"log"
+	"net"
 	"net/http"
 	"net/http/httputil"
 	"net/url"
 	"strings"
 	"sync"
 	"sync/atomic"
+	"time"
 )
 
 // Node holds the data about a backend server
@@ -70,9 +72,48 @@ func loadBalancer(w http.ResponseWriter, r *http.Request) {
 	http.Error(w, "Downtime: No nodes available", http.StatusServiceUnavailable)
 }
 
+// Status check node status by establishing TCP connection
+func (n *Node) Status() bool {
+	conn, err := net.DialTimeout("tcp", n.URL.Host, 2*time.Second)
+	if err != nil {
+		log.Println("Node unreachable: ", err)
+		return false
+	}
+	_ = conn.Close()
+	return true
+}
+
+// SetStatus sets node's status
+func (n *Node) SetStatus(status bool) {
+	n.mutex.Lock()
+	n.Active = status
+	n.mutex.Unlock()
+}
+
+// HealthCheck pings the node and update status
+func (np *NodePool) HealthCheck() {
+	for _, n := range np.nodes {
+		status := n.Status()
+		n.SetStatus(status)
+		msg := "active"
+		if !status {
+			msg = "dead"
+		}
+		log.Printf("%s [%s]\n", n.URL, msg)
+	}
+}
+
 // Check health of nodes periodically
 func healthCheck() {
+	t := time.NewTicker(time.Minute * 2)
+	for {
+		select {
+		case <-t.C:
+			log.Printf("Starting health check...")
+			nodePool.HealthCheck()
 
+		}
+	}
 }
 
 var nodePool NodePool
