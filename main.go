@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"flag"
 	"fmt"
 	"log"
@@ -12,6 +13,11 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+)
+
+const (
+	Attempts int = iota // Unique keys
+	Retry
 )
 
 // Node holds the data about a backend server
@@ -63,6 +69,12 @@ func (np *NodePool) NextNode() *Node {
 
 // Balance incoming requests
 func loadBalancer(w http.ResponseWriter, r *http.Request) {
+	attempts := GetAttemptsFromContext(r)
+	if attempts > 3 {
+		log.Printf("%s(%s) Max attempts reached, terminating\n", r.RemoteAddr, r.URL.Path)
+		http.Error(w, "Service not available", http.StatusServiceUnavailable)
+		return
+	}
 	node := nodePool.NextNode()
 	if node != nil {
 		node.ReverseProxy.ServeHTTP(w, r)
@@ -103,6 +115,32 @@ func (np *NodePool) HealthCheck() {
 	}
 }
 
+// SetNodeStatus sets status of the given nodeURL
+func (np *NodePool) SetNodeStatus(url *url.URL, status bool) {
+	for _, n := range np.nodes {
+		if n.URL.String() == url.String() {
+			n.SetStatus(status)
+			break
+		}
+	}
+}
+
+// GetAttemptsFromContext returns the attempts for request
+func GetAttemptsFromContext(r *http.Request) int {
+	if attempts, ok := r.Context().Value(Attempts).(int); ok {
+		return attempts
+	}
+	return 1
+}
+
+// GetRetryFromContext returns the retry for request
+func GetRetryFromContext(r *http.Request) int {
+	if retry, ok := r.Context().Value(Retry).(int); ok {
+		return retry
+	}
+	return 0
+}
+
 // Check health of nodes periodically
 func healthCheck() {
 	t := time.NewTicker(time.Minute * 2)
@@ -135,6 +173,27 @@ func main() {
 			log.Fatal(err)
 		}
 		proxy := httputil.NewSingleHostReverseProxy(nodeURLParsed)
+		proxy.ErrorHandler = func(w http.ResponseWriter, request *http.Request, e error) {
+			log.Printf("[%s] %s\n", nodeURLParsed.Host, e.Error())
+			retries := GetRetryFromContext(request)
+			if retries < 3 {
+				select {
+				case <-time.After(10 * time.Millisecond):
+					ctx := context.WithValue(request.Context(), Retry, retries+1)
+					proxy.ServeHTTP(w, request.WithContext(ctx))
+				}
+				return
+			}
+			// After 3 retries, set this node as dead
+			nodePool.SetNodeStatus(nodeURLParsed, false)
+
+			// Try diff node
+			attempts := GetAttemptsFromContext(request)
+			log.Printf("%s(%s) Attempting retry %d\n", request.RemoteAddr, request.URL.Path, attempts)
+			ctx := context.WithValue(request.Context(), Attempts, attempts+1)
+			loadBalancer(w, request.WithContext(ctx))
+
+		}
 		nodePool.AddNode(&Node{
 			URL:          nodeURLParsed,
 			Active:       true,
