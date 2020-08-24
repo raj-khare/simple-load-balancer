@@ -9,3 +9,5 @@
 ## Use
 
 `docker-compose up`
+
+Open `http://localhost:3030` on the browser and it will be serviced by different servers
