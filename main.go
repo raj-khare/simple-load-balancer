@@ -24,6 +24,7 @@ const (
 type Node struct {
 	URL          *url.URL
 	Active       bool
+	weight	     float64
 	mutex        sync.RWMutex
 	ReverseProxy *httputil.ReverseProxy
 }
@@ -53,18 +54,72 @@ func (n *Node) isActive() bool {
 	return active
 }
 
+// getWeight returns the weight of the node
+func (n *Node) getWeight() float64 {
+	n.mutex.RLock()
+	weight := n.weight
+	n.mutex.RUnlock()
+	return weight
+}
+
+//Swap two elements in nodePool
+func (np *NodePool) Swap(i uint64, j uint64) {
+	temp := np.nodes[i]
+	np.nodes[i] = np.nodes[j]
+	np.nodes[j] = temp
+}
+
+// Heapify will rearrange the max heap based on weights
+func (np *NodePool) Heapify(idx uint64) {
+	largest := idx
+	left := 2*idx + 1
+	right := 2*idx + 2
+
+	if left < uint64(len(np.nodes)) && np.nodes[left].isActive() && np.nodes[left].getWeight() > np.nodes[largest].getWeight() {
+		largest = left
+	}
+	
+	if right < uint64(len(np.nodes)) && np.nodes[right].isActive() && np.nodes[right].getWeight() > np.nodes[largest].getWeight() {
+		largest = right
+	}
+
+	if largest != idx {
+		np.Swap(largest, idx)
+		np.Heapify(largest)
+	}
+
+	if left < uint64(len(np.nodes)) && np.nodes[left].getWeight() < 1 {
+		np.Heapify(left)
+	}
+
+	if right < uint64(len(np.nodes)) && np.nodes[right].getWeight() < 1 {
+		np.Heapify(right)
+	}
+
+}
+
 // NextNode find next active node
 func (np *NodePool) NextNode() *Node {
-	next := np.NextIdx()
-	// Round Robin algorithm
-	for i := next; i < len(np.nodes)+next; i++ {
-		idx := i % len(np.nodes)
-		if np.nodes[idx].isActive() {
-			atomic.StoreUint64(&np.current, uint64(idx))
-			return np.nodes[idx]
-		}
-	}
-	return nil
+	//// Round Robin algorithm
+	//next := np.NextIdx()
+	//for i := next; i < len(np.nodes)+next; i++ {
+		//idx := i % len(np.nodes)
+		//if np.nodes[idx].isActive() {
+			//atomic.StoreUint64(&np.current, uint64(idx))
+			//return np.nodes[idx]
+		//}
+	//}
+	//return nil
+
+	//Using heapify to select node
+
+	next := np.nodes[0]
+	next.weight /= 2
+	np.Heapify(0)
+	next.weight *= 2
+
+	return next
+
 }
 
 // Balance incoming requests
@@ -95,23 +150,29 @@ func (n *Node) Status() bool {
 	return true
 }
 
-// SetStatus sets node's status
-func (n *Node) SetStatus(status bool) {
+// SetProps sets node's status and changes node's weight
+func (n *Node) SetProps(status bool) {
 	n.mutex.Lock()
 	n.Active = status
+	if !status {
+		n.weight /= 2.0;
+	} else if n.weight < 1{
+		n.weight *= 2.0; 
+	} 
 	n.mutex.Unlock()
 }
+
 
 // HealthCheck pings the node and update status
 func (np *NodePool) HealthCheck() {
 	for _, n := range np.nodes {
 		status := n.Status()
-		n.SetStatus(status)
+		n.SetProps(status)
 		msg := "active"
 		if !status {
 			msg = "dead"
 		}
-		log.Printf("%s [%s]\n", n.URL, msg)
+		log.Printf("%s [%s] [%0.2g]\n", n.URL, msg, n.weight)
 	}
 }
 
@@ -119,7 +180,7 @@ func (np *NodePool) HealthCheck() {
 func (np *NodePool) SetNodeStatus(url *url.URL, status bool) {
 	for _, n := range np.nodes {
 		if n.URL.String() == url.String() {
-			n.SetStatus(status)
+			n.SetProps(status)
 			break
 		}
 	}
@@ -143,7 +204,7 @@ func GetRetryFromContext(r *http.Request) int {
 
 // Check health of nodes periodically
 func healthCheck() {
-	t := time.NewTicker(time.Minute * 2)
+	t := time.NewTicker(time.Second * 30)
 	for {
 		select {
 		case <-t.C:
@@ -197,6 +258,7 @@ func main() {
 		nodePool.AddNode(&Node{
 			URL:          nodeURLParsed,
 			Active:       true,
+			weight:       1,
 			ReverseProxy: proxy,
 		})
 
