@@ -204,7 +204,7 @@ func GetRetryFromContext(r *http.Request) int {
 
 // Check health of nodes periodically
 func healthCheck() {
-	t := time.NewTicker(time.Second * 30)
+	t := time.NewTicker(time.Minute * 2)
 	for {
 		select {
 		case <-t.C:
