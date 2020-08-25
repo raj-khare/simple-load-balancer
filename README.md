@@ -2,7 +2,7 @@
 
 ## Features
 
-- Uses round robin algorithm to balance load among nodes
+- Uses round robin algorithm/weighted max heap to balance load among nodes
 - Passive Health Check every 2 minutes
 - Actively marking dead nodes
 
