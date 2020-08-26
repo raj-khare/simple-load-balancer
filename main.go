@@ -112,13 +112,7 @@ func (np *NodePool) NextNode() *Node {
 	//return nil
 
 	//Using heapify to select node
-
-	next := np.nodes[0]
-	next.weight /= 2
-	np.Heapify(0)
-	next.weight *= 2
-
-	return next
+	return np.nodes[0]
 
 }
 
@@ -133,6 +127,9 @@ func loadBalancer(w http.ResponseWriter, r *http.Request) {
 	node := nodePool.NextNode()
 	if node != nil {
 		node.ReverseProxy.ServeHTTP(w, r)
+		next.weight /= 2
+		np.Heapify(0)
+		next.weight *= 2
 		return
 	}
 	// 0 active nodes available
@@ -155,8 +152,8 @@ func (n *Node) SetProps(status bool) {
 	n.mutex.Lock()
 	n.Active = status
 	if !status {
-		n.weight /= 2.0;
-	} else if n.weight < 1{
+		n.weight /= 3.0;
+	} else if n.weight < 1 {
 		n.weight *= 2.0; 
 	} 
 	n.mutex.Unlock()
